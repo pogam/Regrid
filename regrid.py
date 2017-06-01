@@ -12,17 +12,19 @@ import itertools
 
 ########################################
 def star_outpolygon_gridin_intersection(param):
-    return triangle_img_pixel_intersection(*param)
+    return outpolygon_gridin_intersection(*param)
 
 
 #---------------------------------------
 def outpolygon_gridin_intersection(i_out_polygon, out_polygon , gridin_x,  gridin_y, gridin_polygon):
   
     out = []
-    
+    dx_in = gridin_x[1:,1:] - gridin_x[:-1,:-1]
+    dy_in = gridin_y[1:,1:] - gridin_y[:-1,:-1]
+
     #first check for gridin reso < gridout reso
-    idx1 = np.where( (gridin_x >= out_polygon.bounds[0]) & (gridin_x <= out_polygon.bounds[2]) & 
-                    (gridin_y >= out_polygon.bounds[1]) & (gridin_y <= out_polygon.bounds[3]) )
+    idx1 = np.where( ( (gridin_x[:-1,:-1] - out_polygon.bounds[0]) >= -1*dx_in ) & ( (gridin_x[1:,1:] - out_polygon.bounds[2]) <= dx_in ) & 
+                     ( (gridin_y[:-1,:-1] - out_polygon.bounds[1]) >= -1*dy_in ) & ( (gridin_y[1:,1:] - out_polygon.bounds[3]) <= dy_in ) )
     
     #then the opposite
     points = np.dstack(out_polygon.exterior.coords.xy)[0]
@@ -50,14 +52,17 @@ def outpolygon_gridin_intersection(i_out_polygon, out_polygon , gridin_x,  gridi
         jj_img_polygon_l = idx2[1].min()
         jj_img_polygon_u = idx2[1].max()
     else:
-        pdb.set_trace()
         return out 
 
 
     idxi = np.arange(ii_img_polygon_l,ii_img_polygon_u+1)
     idxj = np.arange(jj_img_polygon_l,jj_img_polygon_u+1)
     for iii,jjj in itertools.product(idxi, idxj):
-        intersection = out_polygon.intersection(gridin_polygon[iii,jjj])
+        try:
+            intersection = out_polygon.intersection(gridin_polygon[iii,jjj])
+        except: 
+            pdb.set_trace()
+            
         if intersection.area!=0:
             out.append([iii,jjj,i_out_polygon,intersection.area])
 
@@ -66,8 +71,23 @@ def outpolygon_gridin_intersection(i_out_polygon, out_polygon , gridin_x,  gridi
 
 
 ########################################
-def get_polygon_from_grid(grid_i, grid_j):
+def get_polygon_from_grid(grid_i_in, grid_j_in, flag_add_1extra_rowCol=False):
    
+    if flag_add_1extra_rowCol:
+        grid_i = np.zeros([grid_i_in.shape[0]+1,grid_i_in.shape[1]+1])
+        grid_i[:-1,:-1] = grid_i_in
+        grid_i[-1,: ] = grid_i[-2,:] + (grid_i[-2,:]-grid_i[-3,:])
+        grid_i[ :,-1] = grid_i[ :,-2] + (grid_i[:,-2]-grid_i[:,-3])
+
+        grid_j = np.zeros([grid_i_in.shape[0]+1,grid_i_in.shape[1]+1])
+        grid_j[:-1,:-1] = grid_j_in
+        grid_j[-1,:] = grid_j[-2,:] + (grid_j[-2,:]-grid_j[-3,:])
+        grid_j[ :,-1] = grid_j[ :,-2] + (grid_j[:,-2]-grid_j[:,-3])
+        
+    else:
+        grid_i = grid_i_in
+        grid_j = grid_j_in
+
     ni, nj = grid_i.shape[0]-1,grid_i.shape[1]-1 
     img_polygons = []
     
@@ -80,7 +100,7 @@ def get_polygon_from_grid(grid_i, grid_j):
         img_polygons.append(Polygon(pts))
     img_polygons = np.array(img_polygons).reshape(ni,nj)
 
-    return img_polygons
+    return img_polygons, grid_i, grid_j
 
 
 
@@ -147,6 +167,44 @@ def grid2grid_pixel_match(regrid_name,                         \
 
 
 
+########################################
+def map_data(out_in_grid_list,out_dimensions,data_in,flag='average',gridReso_in=None):
+
+    nx2,ny2 = out_dimensions
+    data_out            = np.zeros(nx2*ny2)
+    data_out_pixel_area = np.zeros(nx2*ny2)
+
+    for i_outpolygon in range(nx2*ny2):
+        for idx_in, area_intersect in out_in_grid_list[i_outpolygon]:
+            if flag == 'average':
+                data_out_pixel_area[i_outpolygon] += area_intersect 
+                data_out[i_outpolygon]            += area_intersect * data_in[idx_in]
+           
+
+            elif flag == 'sum':
+                data_out[i_outpolygon]            += area_intersect/gridReso_in[idx_in] * data_in[idx_in]
+                data_out_pixel_area[i_outpolygon] += area_intersect 
+                
+            elif flag == 'max':
+                if len(data_out[i_outpolygon])>1:
+                    data_out[i_outpolygon]             = max([data_out[i_outpolygon],data_in[idx_in].max()])
+                else:
+                    data_out[i_outpolygon]             = data_in[idx_in].max()
+                data_out_pixel_area[i_outpolygon] += area_intersect 
+
+            else: 
+                print 'check flag in regrid'
+                sys.exit()
+    
+    if flag == 'average':
+        idx = np.where(data_out_pixel_area!=0)
+        data_out[idx] /= data_out_pixel_area[idx]
+        idx = np.where(data_out_pixel_area==0)
+        data_out[idx] = -999
+    
+    return data_out.reshape(nx2,ny2),data_out_pixel_area.reshape(nx2,ny2)
+
+
 ###################################
 if __name__ == '__main__':
 ###################################
@@ -156,15 +214,18 @@ if __name__ == '__main__':
 
     #gridin
     nx, ny = 100, 100
-    Lx, Ly = 100, 100
-    gridin_y, gridin_x = np.meshgrid(np.linspace(0,Ly+Ly/ny,ny+1),np.linspace(0,Lx+Lx/nx,nx+1)) 
-    data_in = np.zeros_like(gridin_x)
+    Lx, Ly = 101, 101
+    dxin,dyin = 1.*Lx/nx,1.*Ly/ny
+    gridin_y, gridin_x = np.meshgrid(np.linspace(0,Ly,ny+1),np.linspace(0,Lx,nx+1)) 
+    data_in = np.zeros([nx,ny])
     data_in[25:-25,25:-25] = 1
+    gridin_res = dxin*dyin*np.ones_like(data_in)
 
     #gridout
-    nx2, ny2 = 100, 100
-    Lx2, Ly2 = 50, 50
-    gridout_y, gridout_x = np.meshgrid(np.linspace(0,Ly2+Ly2/ny2,ny2+1),np.linspace(0,Lx2+Lx2/nx2,nx2+1)) 
+    nx2, ny2 = 150, 150
+    Lx2, Ly2 = 90, 90
+    dxout,dyout = 1.*Lx2/nx2,1.*Ly2/ny2
+    gridout_y, gridout_x = np.meshgrid(np.linspace(0,Ly2,ny2+1),np.linspace(0,Lx2,nx2+1)) 
 
 
 
@@ -172,31 +233,21 @@ if __name__ == '__main__':
     #######################
     regrid_name = 'test'
     wkdir = './'
-    gridin_polygon  = get_polygon_from_grid(gridin_x,  gridin_y )
-    gridout_polygon = get_polygon_from_grid(gridout_x, gridout_y)
+    gridin_polygon, gridin_xx, gridin_yy    = get_polygon_from_grid(gridin_x,  gridin_y )
+    gridout_polygon, gridout_xx, gridout_yy = get_polygon_from_grid(gridout_x, gridout_y)
 
     in_out_grid_list, out_in_grid_list = grid2grid_pixel_match(regrid_name,                         \
-                                                               gridin_x,  gridin_y, gridin_polygon, \
+                                                               gridin_xx,  gridin_yy, gridin_polygon, \
                                                                gridout_polygon,                     \
                                                                wkdir, flag_parallel=False, flag_freshstart=True)
 
     
     #map data
     #######################
-    data_out            = np.zeros(nx2*ny2)
-    data_out_pixel_area = np.zeros(nx2*ny2)
-
-    for i_outpolygon in range(nx2*ny2):
-        for idx_in, area_intersect in out_in_grid_list[i_outpolygon]:
-            data_out_pixel_area[i_outpolygon] += area_intersect 
-            data_out[i_outpolygon]            += area_intersect * data_in[ idx_in ]
-    idx = np.where(data_out_pixel_area!=0)
-    data_out[idx] /= data_out_pixel_area[idx]
-    idx = np.where(data_out_pixel_area==0)
-    data_out[idx] = -999
-    data_out = data_out.reshape(nx2,ny2)
+    data_out, data_out_pixel_area = map_data(out_in_grid_list,[gridout_xx.shape[0]-1,gridout_xx.shape[1]-1],data_in,flag='sum',gridReso_in=gridin_res)
 
 
+    print data_in.sum(), data_out.sum()
 
     #plot
     #######################
@@ -206,6 +257,6 @@ if __name__ == '__main__':
     ax = plt.subplot(132)
     ax.imshow(np.ma.masked_where(data_out==-999,data_out).T,origin='lower',extent=(gridout_x.min(),gridout_x.max(),gridout_y.min(),gridout_y.max()) )
     ax = plt.subplot(133)
-    ax.imshow(np.ma.masked_where(data_out==-999,data_out_pixel_area.reshape(nx2,ny2)).T,origin='lower',extent=(gridout_x.min(),gridout_x.max(),gridout_y.min(),gridout_y.max()) )
+    ax.imshow(np.ma.masked_where(data_out==-999,data_out_pixel_area).T,origin='lower',extent=(gridout_x.min(),gridout_x.max(),gridout_y.min(),gridout_y.max()) )
     plt.show()
 
