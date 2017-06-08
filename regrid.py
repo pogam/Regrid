@@ -177,8 +177,9 @@ def map_data(out_in_grid_list,out_dimensions,data_in,flag='average',gridReso_in=
     for i_outpolygon in range(nx2*ny2):
         for idx_in, area_intersect in out_in_grid_list[i_outpolygon]:
             if flag == 'average':
-                data_out_pixel_area[i_outpolygon] += area_intersect 
-                data_out[i_outpolygon]            += area_intersect * data_in[idx_in]
+                if data_in[idx_in] != -999:
+                    data_out_pixel_area[i_outpolygon] += area_intersect 
+                    data_out[i_outpolygon]            += area_intersect * data_in[idx_in]
            
 
             elif flag == 'sum':
