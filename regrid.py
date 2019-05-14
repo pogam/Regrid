@@ -10,6 +10,15 @@ from skimage import feature, measure
 import scipy
 import itertools
 
+################################################
+def cpu_count():
+    try:
+        return int(os.environ['ntask'])
+    except:
+        print 'env variable ntask is not defined'
+        sys.exit() 
+        #return multiprocessing.cpu_count()
+
 ########################################
 def star_outpolygon_gridin_intersection(param):
     return outpolygon_gridin_intersection(*param)
@@ -132,7 +141,7 @@ def grid2grid_pixel_match(regrid_name,                         \
 
         if flag_parallel:
             # set up a pool to run the parallel processing
-            cpus = multiprocessing.cpu_count()
+            cpus = cpu_count() #multiprocessing.cpu_count()
             pool = multiprocessing.Pool(processes=cpus)
 
             # then the map method of pool actually does the parallelisation  
